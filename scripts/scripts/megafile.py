@@ -39,7 +39,9 @@ def get_testing():
             "7-day smoothed daily change",
             "Cumulative total per thousand",
             "Daily change in cumulative total per thousand",
-            "7-day smoothed daily change per thousand"
+            "7-day smoothed daily change per thousand",
+            "Short-term positive rate",
+            "Short-term tests per case"
         ]
     )
 
@@ -51,7 +53,9 @@ def get_testing():
         "7-day smoothed daily change": "new_tests_smoothed",
         "Cumulative total per thousand": "total_tests_per_thousand",
         "Daily change in cumulative total per thousand": "new_tests_per_thousand",
-        "7-day smoothed daily change per thousand": "new_tests_smoothed_per_thousand"
+        "7-day smoothed daily change per thousand": "new_tests_smoothed_per_thousand",
+        "Short-term positive rate": "positive_rate",
+        "Short-term tests per case": "tests_per_case"
     })
 
     testing[
@@ -91,51 +95,46 @@ def get_ecdc():
     ecdc_variables = [
         "total_cases",
         "new_cases",
+        "weekly_cases",
         "total_deaths",
         "new_deaths",
+        "weekly_deaths",
         "total_cases_per_million",
         "new_cases_per_million",
+        "weekly_cases_per_million",
         "total_deaths_per_million",
-        "new_deaths_per_million"
+        "new_deaths_per_million",
+        "weekly_deaths_per_million"
     ]
 
     data_frames = []
 
     # Process each file and melt it to vertical format
     for ecdc_var in ecdc_variables:
-
         tmp = pd.read_csv(os.path.join(DATA_DIR, f"../../public/data/ecdc/{ecdc_var}.csv"))
-
-        for country in tmp.columns[2:]:
-
-            country_vals = tmp[country].dropna().values
-            if len(country_vals) == 0:
-                continue
-
-            previous_RA = country_vals[-8:-1].mean()
-            new_RA = country_vals[-7:].mean()
-
-            if new_RA > 1.2 * previous_RA and new_RA > 100:
-                print("<!> Sudden increase of {} in {}: {} (7-day average was {})".format(
-                    ecdc_var,
-                    country,
-                    int(country_vals[-1]),
-                    int(previous_RA)
-                ))
-
-            new_val = country_vals[-1]
-
-            if new_val < 0:
-                print(f"<!> Negative number of {ecdc_var} in {country}: {new_val}")
-
         country_cols = list(tmp.columns)
         country_cols.remove("date")
+
+        # Carrying last observation forward for International totals to avoid discrepancies
+        if ecdc_var[:5] == "total":
+            tmp = tmp.sort_values("date")
+            tmp["International"] = tmp["International"].ffill()
+
         tmp = (
             pd.melt(tmp, id_vars="date", value_vars=country_cols)
             .rename(columns={"value": ecdc_var, "variable": "location"})
             .dropna()
         )
-        tmp[ecdc_var] = tmp[ecdc_var].round(3)
+        if ecdc_var[:7] == "weekly_":
+            tmp[ecdc_var] = tmp[ecdc_var].div(7).round(3)
+            tmp = tmp.rename(errors="ignore", columns={
+                "weekly_cases": "new_cases_smoothed",
+                "weekly_deaths": "new_deaths_smoothed",
+                "weekly_cases_per_million": "new_cases_smoothed_per_million",
+                "weekly_deaths_per_million": "new_deaths_smoothed_per_million"
+            })
+        else:
+            tmp[ecdc_var] = tmp[ecdc_var].round(3)
         data_frames.append(tmp)
     print()
 
@@ -181,8 +180,13 @@ def get_cgrt():
 
     cgrt = pd.read_csv(
         "https://raw.githubusercontent.com/OxCGRT/covid-policy-tracker/master/data/OxCGRT_latest.csv",
-        usecols=["CountryName", "Date", "StringencyIndex"]
+        low_memory=False
     )
+
+    if "RegionCode" in cgrt.columns:
+        cgrt = cgrt[cgrt.RegionCode.isnull()]
+
+    cgrt = cgrt[["CountryName", "Date", "StringencyIndex"]]
 
     cgrt.loc[:, "Date"] = pd.to_datetime(cgrt["Date"], format="%Y%m%d").dt.date.astype(str)
 
@@ -220,7 +224,7 @@ def df_to_json(complete_dataset, output_path, static_columns):
     complete_dataset = complete_dataset.dropna(axis="rows", subset=["iso_code"])
 
     for _, row in complete_dataset.iterrows():
-        
+
         row_iso = row["iso_code"]
         row_dict_static = row.drop("iso_code")[static_columns].dropna().to_dict()
         row_dict_dynamic = row.drop("iso_code").drop(static_columns).dropna().to_dict()
@@ -300,7 +304,7 @@ def generate_megafile():
         "aged_70_older": "un/aged_70_older.csv",
         "gdp_per_capita": "wb/gdp_per_capita.csv",
         "extreme_poverty": "wb/extreme_poverty.csv",
-        "cvd_death_rate": "gbd/cvd_death_rate.csv",
+        "cardiovasc_death_rate": "gbd/cardiovasc_death_rate.csv",
         "diabetes_prevalence": "wb/diabetes_prevalence.csv",
         "female_smokers": "wb/female_smokers.csv",
         "male_smokers": "wb/male_smokers.csv",
